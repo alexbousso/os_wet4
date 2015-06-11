@@ -1,17 +1,3 @@
-#include <linux/ctype.h>
-#include <linux/config.h>
-#include <linux/module.h>
-#include <linux/kernel.h>  	
-#include <linux/slab.h>
-#include <linux/fs.h>       		
-#include <linux/errno.h>  
-#include <linux/types.h> 
-#include <linux/proc_fs.h>
-#include <linux/fcntl.h>
-#include <asm/system.h>
-#include <asm/uaccess.h>
-#include <asm/semaphore.h>
-
 #include "snake.h"
 #include "snake1.h"
 
@@ -89,9 +75,9 @@ int init_module( void ) {
 }
 
 
-void cleanup_module( void ) {
-	
-	unregister_chrdev( my_major, MY_MODULE);
+void cleanup_module( void ) { //what about the case that cleanup_module is called and not all the games are over?
+	//release semaphore
+	unregister_chrdev(my_major, MY_MODULE);
 	
 	free(games);
 
@@ -100,9 +86,13 @@ void cleanup_module( void ) {
 
 
 int my_open( struct inode *inode, struct file *filp ) {
+	if(!inode || !flip) return -1; //what should we return???? <----------------------
 	int minor = MINOR(inode->i_rdev);
+	if(minor < 0 || minor > max_games-1){
+		return -1; //which errno should we return?? <--------------------------
+	}
 	down(games[minor].sem_game_data); //lock
-	if(minor < 0 || minor > max_games-1 || games[minor].num_of_players >= 2 || games[minor].winner){
+	if(games[minor].num_of_players >= 2 || games[minor].winner){
 		up(games[minor].sem_game_data); //unlock
 		return -1; //which errno should we return?? <--------------------------
 	}
@@ -117,6 +107,7 @@ int my_open( struct inode *inode, struct file *filp ) {
 	}
 	else { //second player
 		filp->private_data[1] = BLACK;
+		games[minor].player = WHITE;
 		up(games[minor].sem_game_data); //unlock
 		up(&(games[minor].sem_begin_game)); //unlock
 	}
@@ -126,6 +117,7 @@ int my_open( struct inode *inode, struct file *filp ) {
 
 
 int my_release( struct inode *inode, struct file *filp ) {
+	if(!inode || !flip) return -1; //what should we return???? <----------------------
 	int minor = MINOR(inode->i_rdev);
 	down(games[minor].sem_game_data); //lock
 	games[minor].num_of_players--;
@@ -141,16 +133,80 @@ int my_release( struct inode *inode, struct file *filp ) {
 
 
 ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos ) {
-	//read the data
-	//copy the data to user
-    //return the ammount of read data
+	char* tmp_buf;
+	int minor;
+	if(!flip || (!buff && count)) return -1; //what should we return???? <-------------------------------
+	if(!count) return 0;
+	minor = filp->private_data[0];
+	down(games[minor].sem_game_data); //lock
+	if(games[minor].num_of_players != 2){
+		up(games[minor].sem_game_data); //unlock
+		return -1; // what should we return????? <-----------------------------------------
+	}
+	tmp_buf = (char*) kmalloc(count);
+	Print(&(games[i].board), tmp_buf, count);
+	copy_to_user(buf, tmp_buf, (unsigned long)count);
+	free(tmp_buf);
+	up(games[minor].sem_game_data); //unlock
+	return count;
 }
 
 
 ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos) {
-    //copy the data from user
-	//write the data
-    // return the ammount of written data
+	int minor = filp->private_data[0];
+	int player =  filp->private_data[1];
+	char* kernel_buf;
+	int k_buf_pos = 0, orig_size = count;
+	
+	if(!flip) return -1; //what should we return???? <-------------------------------
+	if(!buff || count == 0) return 0;
+	
+	down(games[minor].sem_game_data); //lock
+	if(games[minor].num_of_players != 2){
+		up(games[minor].sem_game_data); //unlock
+		return -1; // what should we return????? <-----------------------------------------
+	}
+
+	kernel_buf = (char*) kmalloc (count);
+	copy_from_user(kernel_buf,buf,(unsigned long)count);
+	up(games[minor].sem_game_data); //unlock
+	
+	while(count){ //there are still moves in buff
+		down(games[minor].sem_game_data); //lock
+		Direction move;
+		while(games[minor].player != player){
+			up(games[minor].sem_game_data); //unlock
+			schedule();
+			down(games[minor].sem_game_data); //lock
+		}
+		//my turn! play:
+		move = kernel_buf[k_buf_pos++] - '0';
+		if (games[minor].winner || (move != UP && move != DOWN && move != LEFT && move != RIGHT)){
+			free(kernel_buf);
+			games[minor].num_of_players--;
+			games[minor].winner = -player;
+			free(filp->private_data);
+			up(games[minor].sem_game_data); //unlock
+			return -1; //k_buf_pos-1; what shoulld we return?? <-----------------
+		}
+		else{
+			Player winner;
+			if(!Update(&(games[minor].board),player, &winner, move)){
+				free(kernel_buf);
+				games[minor].num_of_players--;
+				games[minor].winner = winner;
+				free(filp->private_data);
+				up(games[minor].sem_game_data); //unlock
+				return k_buf_pos-1; //k_buf_pos-1; what shoulld we return?? <-----------------
+			}
+		}
+		games[minor].player = -player;
+		up(games[minor].sem_game_data); //unlock
+		count--;
+		buf++;
+	}
+	free(kernel_buf);
+	return orig_size;
 }
 
 
@@ -185,72 +241,47 @@ bool Init(Matrix *matrix)
 		(*matrix)[N - 1][i] = BLACK * (i + 1);
 	}
 	/* initialize the food location */
-	srand(time(0));
 	if (RandFoodLocation(matrix) != ERR_OK)
 		return FALSE;
-	printf("instructions: white player is represented by positive numbers, \nblack player is represented by negative numbers\n");
-	Print(matrix);
 
 	return TRUE;
 }
 
-bool Update(Matrix *matrix, Player player)
+bool Update(Matrix *matrix, Player player, Player* winner, Direction move)
 {
 	ErrorCode e;
-	Point p = GetInputLoc(matrix, player);
+	Point p = GetInputLoc(matrix, player, move);
 
-	if (!CheckTarget(matrix, player, p))
-	{
-		printf("% d lost.", player);
+	if (!CheckTarget(matrix, player, p)){// printf("% d lost.", player);
+		*winner = -player;
 		return FALSE;
 	}
+
 	e = CheckFoodAndMove(matrix, player, p);
-	if (e == ERR_BOARD_FULL)
-	{
-		printf("the board is full, tie");
+	if (e == ERR_BOARD_FULL){ //printf("the board is full, tie");
+		*winner = TIE;
 		return FALSE;
 	}
-	if (e == ERR_SNAKE_IS_TOO_HUNGRY)
-	{
-		printf("% d lost. the snake is too hungry", player);
+	if (e == ERR_SNAKE_IS_TOO_HUNGRY){ //printf("% d lost. the snake is too hungry", player);
+		*winner = -player;
 		return FALSE;
 	}
 	// only option is that e == ERR_OK
-	if (IsMatrixFull(matrix))
-	{
-		printf("the board is full, tie");
+	if (IsMatrixFull(matrix)){ //printf("the board is full, tie");
+		*winner = TIE;
 		return FALSE;
 	}
 
 	return TRUE;
 }
 
-Point GetInputLoc(Matrix *matrix, Player player)
+Point GetInputLoc(Matrix *matrix, Player player, Direction move)
 {
-	Direction dir;
 	Point p;
-
-	printf("% d, please enter your move(DOWN2, LEFT4, RIGHT6, UP8):\n", player);
-	do
-	{
-		if (scanf("%d", &dir) < 0)
-		{
-			printf("an error occurred, the program will now exit.\n");
-			exit(1);
-		}
-		if (dir != UP   && dir != DOWN && dir != LEFT && dir != RIGHT)
-		{
-			printf("invalid input, please try again\n");
-		}
-		else
-		{
-			break;
-		}
-	} while (TRUE);
 
 	p = GetSegment(matrix, player);
 
-	switch (dir)
+	switch (move)
 	{
 	case UP:    --p.y; break;
 	case DOWN:  ++p.y; break;
@@ -375,8 +406,10 @@ ErrorCode RandFoodLocation(Matrix *matrix)
 	Point p;
 	do
 	{
-		p.x = rand() % N;
-		p.y = rand() % N;
+		get_random_bytes(&p.x,sizeof(int));
+		p.x = p.x % N;
+		get_random_bytes(&p.y,sizeof(int));
+		p.y = p.y % N;
 	} while (!IsAvailable(matrix, p) || IsMatrixFull(matrix));
 
 	if (IsMatrixFull(matrix))
@@ -400,28 +433,60 @@ bool IsMatrixFull(Matrix *matrix)
 	return TRUE;
 }
 
-void Print(Matrix *matrix)
+void Print(Matrix *matrix, char* buff, size_t count)
 {
-	int i;
 	Point p;
-	for (i = 0; i < N + 1; ++i)
-		printf("---");
-	printf("\n");
+	char tmp_buff[3*N*N + 10*N + 10]; //3*N*N + 10*N + 8 = (3N+4)(N+2)= (#cols)*(#rows)
+	int tmp_buff_size = 3*N*N + 10*N + 10;
+	int i = 0, tmp_buff_curr = 0;
+	
+	for(i = 0; i < tmp_buff_size; i++)
+		tmp_buff[i] = 0;
+	for(i = 0; i < count; i++)
+		buff[i] = 0;
+	
+	for (i = 0; i < N + 1; ++i){
+		strncpy(tmp_buff+tmp_buff_curr,"---",3);
+		tmp_buff_curr+=3;
+	}
+	strncpy(tmp_buff+tmp_buff_curr,"\n",1);
+	tmp_buff_curr+=1;
+	
 	for (p.y = 0; p.y < N; ++p.y)
 	{
-		printf("|");
+		strncpy(tmp_buff+tmp_buff_curr,"|",1);
+		tmp_buff_curr+=1;
 		for (p.x = 0; p.x < N; ++p.x)
 		{
 			switch ((*matrix)[p.y][p.x])
 			{
-			case FOOD:  printf("  *"); break;
-			case EMPTY: printf("  ."); break;
-			default:    printf("% 3d", (*matrix)[p.y][p.x]);
+			case FOOD:
+				strncpy(tmp_buff+tmp_buff_curr,"  *",3);
+				tmp_buff_curr+=3;
+				break;
+			case EMPTY:
+				strncpy(tmp_buff+tmp_buff_curr,"  .",3);
+				tmp_buff_curr+=3;
+				break;
+			default: //printf("% 3d", (*matrix)[p.y][p.x]);
+				tmp_buff[tmp_buff_curr++]=' ';
+				if((*matrix)[p.y][p.x] < 0)
+					tmp_buff[tmp_buff_curr++] = '-';
+				else
+					tmp_buff[tmp_buff_curr++] = ' ';
+				tmp_buff[tmp_buff_curr++] = (*matrix)[p.y][p.x] + '0';
 			}
 		}
-		printf(" |\n");
+		strncpy(tmp_buff+tmp_buff_curr," |\n",3);
+		tmp_buff_curr+=3;
 	}
-	for (i = 0; i < N + 1; ++i)
-		printf("---");
-	printf("\n");
+	
+	for (i = 0; i < N + 1; ++i){
+		strncpy(tmp_buff+tmp_buff_curr,"---",3);
+		tmp_buff_curr+=3;
+	}
+	strncpy(tmp_buff+tmp_buff_curr,"\n",1);
+	tmp_buff_curr+=1;
+	
+	strncpy(buff, tmp_buff, count);
 }
