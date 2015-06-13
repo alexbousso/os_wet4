@@ -7,6 +7,4 @@
 #define SNAKE_GET_WINNER  _IOR(SNAKE_IOC_MAGIC, 0, int)
 #define SNAKE_GET_COLOR   _IOR(SNAKE_IOC_MAGIC, 1, int)
 
-#define DEBUG_ON
-
 #endif /* _SNAKE_H_ */

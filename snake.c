@@ -28,7 +28,6 @@ struct file_operations my_fops = {
 	.write=		my_write,
 	.llseek=		NULL,
 	.ioctl=		my_ioctl,
-	.owner=		THIS_MODULE,
 };
 
 struct game {
@@ -48,13 +47,14 @@ int my_major = 0; 			/* will hold the major # of my device driver */
 struct game* games = NULL;
 
 int init_module( void ) {
+	SET_MODULE_OWNER(&my_fops);
 	my_major = register_chrdev( my_major, MY_MODULE, &my_fops );
 	if( my_major < 0 ) {
 		printk(KERN_WARNING "ERROR: can't get dynamic major\n" ); //changed to printk <-------
 		return my_major;
 	}
 	
-	games = kmalloc(sizeof(struct game) * max_games, 0); // TODO flags
+	games = kmalloc(sizeof(struct game) * max_games, GFP_KERNEL); // TODO flags
 	if (!games) {
 		dbg_print(10, "ERROR: Memory error!\n"); //changed to printk <-------
 		return -1;
@@ -98,7 +98,7 @@ int my_open( struct inode *inode, struct file *filp ) {
 	}
 	
 	games[minor].num_of_players++;
-	filp->private_data = (int*) kmalloc (sizeof(int)*2, 0); // [0]=minor, [1]=colour; TODO: flags
+	filp->private_data = (int*) kmalloc (sizeof(int)*2, GFP_KERNEL); // [0]=minor, [1]=colour; TODO: flags
 	((int *)filp->private_data)[0] = minor;
 	if(games[minor].num_of_players == 1){ //first player 
 		((int *)filp->private_data)[1] = WHITE;
@@ -143,7 +143,7 @@ ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos ) {
 		up(&games[minor].sem_game_data); //unlock
 		return -1; // what should we return????? <-----------------------------------------
 	}
-	tmp_buf = (char*) kmalloc(count, 0); // TODO: flags
+	tmp_buf = (char*) kmalloc(count, GFP_KERNEL); // TODO: flags
 	Print(&(games[minor].board), tmp_buf, count);
 	copy_to_user(buf, tmp_buf, (unsigned long)count);
 	kfree(tmp_buf);
@@ -167,7 +167,7 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 		return -1; // what should we return????? <-----------------------------------------
 	}
 
-	kernel_buf = (char*) kmalloc (count, 0); // TODO: flags
+	kernel_buf = (char*) kmalloc (count, GFP_KERNEL); // TODO: flags
 	copy_from_user(kernel_buf,buf,(unsigned long)count);
 	up(&games[minor].sem_game_data); //unlock
 	
@@ -490,3 +490,4 @@ void Print(Matrix *matrix, char* buff, size_t count)
 	
 	strncpy(buff, tmp_buff, count);
 }
+
