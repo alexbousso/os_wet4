@@ -50,13 +50,13 @@ struct game* games = NULL;
 int init_module( void ) {
 	my_major = register_chrdev( my_major, MY_MODULE, &my_fops );
 	if( my_major < 0 ) {
-		printk(10, KERN_WARNING "ERROR: can't get dynamic major\n" ); //changed to printk <-------
+		printk(KERN_WARNING "ERROR: can't get dynamic major\n" ); //changed to printk <-------
 		return my_major;
 	}
 	
-	games = malloc(sizeof(struct game *) * max_games);
+	games = kmalloc(sizeof(struct game) * max_games, 0); // TODO flags
 	if (!games) {
-		printk(10, "ERROR: Memory error!\n"); //changed to printk <-------
+		dbg_print(10, "ERROR: Memory error!\n"); //changed to printk <-------
 		return -1;
 	}
 	
@@ -79,36 +79,36 @@ void cleanup_module( void ) { //what about the case that cleanup_module is calle
 	//release semaphore
 	unregister_chrdev(my_major, MY_MODULE);
 	
-	free(games);
+	kfree(games);
 
 	return;
 }
 
 
 int my_open( struct inode *inode, struct file *filp ) {
-	if(!inode || !flip) return -1; //what should we return???? <----------------------
+	if(!inode || !filp) return -1; //what should we return???? <----------------------
 	int minor = MINOR(inode->i_rdev);
 	if(minor < 0 || minor > max_games-1){
 		return -1; //which errno should we return?? <--------------------------
 	}
-	down(games[minor].sem_game_data); //lock
+	down(&games[minor].sem_game_data); //lock
 	if(games[minor].num_of_players >= 2 || games[minor].winner){
-		up(games[minor].sem_game_data); //unlock
+		up(&games[minor].sem_game_data); //unlock
 		return -1; //which errno should we return?? <--------------------------
 	}
 	
 	games[minor].num_of_players++;
-	filp->private_data = (int*) malloc (sizeof(int)*2); // [0]=minor, [1]=colour;
-	filp->private_data[0] = minor;
+	filp->private_data = (int*) kmalloc (sizeof(int)*2, 0); // [0]=minor, [1]=colour; TODO: flags
+	((int *)filp->private_data)[0] = minor;
 	if(games[minor].num_of_players == 1){ //first player 
-		filp->private_data[1] = WHITE;
-		up(games[minor].sem_game_data); //unlock
+		((int *)filp->private_data)[1] = WHITE;
+		up(&games[minor].sem_game_data); //unlock
 		down(&(games[minor].sem_begin_game)); //lock
 	}
 	else { //second player
-		filp->private_data[1] = BLACK;
-		games[minor].player = WHITE;
-		up(games[minor].sem_game_data); //unlock
+		((int *)filp->private_data)[1] = BLACK;
+		games[minor].curr_player = WHITE;
+		up(&games[minor].sem_game_data); //unlock
 		up(&(games[minor].sem_begin_game)); //unlock
 	}
 	
@@ -117,17 +117,17 @@ int my_open( struct inode *inode, struct file *filp ) {
 
 
 int my_release( struct inode *inode, struct file *filp ) {
-	if(!inode || !flip) return -1; //what should we return???? <----------------------
+	if(!inode || !filp) return -1; //what should we return???? <----------------------
 	int minor = MINOR(inode->i_rdev);
-	down(games[minor].sem_game_data); //lock
+	down(&games[minor].sem_game_data); //lock
 	games[minor].num_of_players--;
 	
 	if(!games[minor].winner){ //game still on, and one of the players is leaving
-		games[minor].winner = -(flip->private_data[1]);
+		games[minor].winner = -(((int *)filp->private_data)[1]);
 	}
 	
-	free(filp->private_data);
-	up(games[minor].sem_game_data); //unlock
+	kfree(filp->private_data);
+	up(&games[minor].sem_game_data); //unlock
 	return 0;
 }
 
@@ -135,84 +135,84 @@ int my_release( struct inode *inode, struct file *filp ) {
 ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos ) {
 	char* tmp_buf;
 	int minor;
-	if(!flip || (!buff && count)) return -1; //what should we return???? <-------------------------------
+	if(!filp || (!buf && count)) return -1; //what should we return???? <-------------------------------
 	if(!count) return 0;
-	minor = filp->private_data[0];
-	down(games[minor].sem_game_data); //lock
+	minor = ((int *)filp->private_data)[0];
+	down(&games[minor].sem_game_data); //lock
 	if(games[minor].num_of_players != 2){
-		up(games[minor].sem_game_data); //unlock
+		up(&games[minor].sem_game_data); //unlock
 		return -1; // what should we return????? <-----------------------------------------
 	}
-	tmp_buf = (char*) kmalloc(count);
-	Print(&(games[i].board), tmp_buf, count);
+	tmp_buf = (char*) kmalloc(count, 0); // TODO: flags
+	Print(&(games[minor].board), tmp_buf, count);
 	copy_to_user(buf, tmp_buf, (unsigned long)count);
-	free(tmp_buf);
-	up(games[minor].sem_game_data); //unlock
+	kfree(tmp_buf);
+	up(&games[minor].sem_game_data); //unlock
 	return count;
 }
 
 
 ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos) {
-	int minor = filp->private_data[0];
-	int player =  filp->private_data[1];
+	int minor = ((int *)filp->private_data)[0];
+	int player =  ((int *)filp->private_data)[1];
 	char* kernel_buf;
 	int k_buf_pos = 0, orig_size = count;
 	
-	if(!flip) return -1; //what should we return???? <-------------------------------
-	if(!buff || count == 0) return 0;
+	if(!filp) return -1; //what should we return???? <-------------------------------
+	if(!buf || count == 0) return 0;
 	
-	down(games[minor].sem_game_data); //lock
+	down(&games[minor].sem_game_data); //lock
 	if(games[minor].num_of_players != 2){
-		up(games[minor].sem_game_data); //unlock
+		up(&games[minor].sem_game_data); //unlock
 		return -1; // what should we return????? <-----------------------------------------
 	}
 
-	kernel_buf = (char*) kmalloc (count);
+	kernel_buf = (char*) kmalloc (count, 0); // TODO: flags
 	copy_from_user(kernel_buf,buf,(unsigned long)count);
-	up(games[minor].sem_game_data); //unlock
+	up(&games[minor].sem_game_data); //unlock
 	
 	while(count){ //there are still moves in buff
-		down(games[minor].sem_game_data); //lock
+		down(&games[minor].sem_game_data); //lock
 		Direction move;
-		while(games[minor].player != player){
-			up(games[minor].sem_game_data); //unlock
+		while(games[minor].curr_player != player){
+			up(&games[minor].sem_game_data); //unlock
 			schedule();
-			down(games[minor].sem_game_data); //lock
+			down(&games[minor].sem_game_data); //lock
 		}
 		//my turn! play:
 		move = kernel_buf[k_buf_pos++] - '0';
 		if (games[minor].winner || (move != UP && move != DOWN && move != LEFT && move != RIGHT)){
-			free(kernel_buf);
+			kfree(kernel_buf);
 			games[minor].num_of_players--;
 			games[minor].winner = -player;
-			free(filp->private_data);
-			up(games[minor].sem_game_data); //unlock
+			kfree(filp->private_data);
+			up(&games[minor].sem_game_data); //unlock
 			return -1; //k_buf_pos-1; what shoulld we return?? <-----------------
 		}
 		else{
 			Player winner;
 			if(!Update(&(games[minor].board),player, &winner, move)){
-				free(kernel_buf);
+				kfree(kernel_buf);
 				games[minor].num_of_players--;
 				games[minor].winner = winner;
-				free(filp->private_data);
-				up(games[minor].sem_game_data); //unlock
+				kfree(filp->private_data);
+				up(&games[minor].sem_game_data); //unlock
 				return k_buf_pos-1; //k_buf_pos-1; what shoulld we return?? <-----------------
 			}
 		}
-		games[minor].player = -player;
-		up(games[minor].sem_game_data); //unlock
+		games[minor].curr_player = -player;
+		up(&games[minor].sem_game_data); //unlock
 		count--;
 		buf++;
 	}
-	free(kernel_buf);
+	kfree(kernel_buf);
 	return orig_size;
 }
 
 
 
 int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg) {
-
+/*
 	switch( cmd ) {
 		case MY_OP1:
             //handle op1;
@@ -223,7 +223,7 @@ int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned 
 			break;
 
 		default: return -ENOTTY;
-	}
+	}*/
 	return 0;
 }
 

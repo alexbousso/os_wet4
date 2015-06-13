@@ -66,10 +66,16 @@ typedef int ErrorCode;
 #define ERR_BOARD_FULL			((ErrorCode)-1)
 #define ERR_SNAKE_IS_TOO_HUNGRY ((ErrorCode)-2)
 
+int my_open( struct inode *inode, struct file *filp );
+int my_release( struct inode *inode, struct file *filp );
+ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos );
+ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos);
+int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg);
+
 bool Init(Matrix*); /* initialize the board. return false if the board is illegal (should not occur, affected by N, M parameters) */
-bool Update(Matrix*, Player);/* handle all updating to this player. returns whether to continue or not. */
+bool Update(Matrix *matrix, Player player, Player* winner, Direction move);/* handle all updating to this player. returns whether to continue or not. */
 void Print(Matrix*, char*, size_t);/* prints the state of the board */
-Point GetInputLoc(Matrix*, Player, Direction)/* calculates the location that the player wants to go to */
+Point GetInputLoc(Matrix*, Player, Direction);/* calculates the location that the player wants to go to */
 bool CheckTarget(Matrix*, Player, Point);/* checks if the player can move to the specified location */
 Point GetSegment(Matrix*, int);/* gets the location of a segment which is numbered by the value */
 bool IsAvailable(Matrix*, Point);/* returns if the point wanted is in bounds and not occupied by any snake */
