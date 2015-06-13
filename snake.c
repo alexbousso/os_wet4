@@ -47,16 +47,19 @@ int my_major = 0; 			/* will hold the major # of my device driver */
 struct game* games = NULL;
 
 int init_module( void ) {
+	dbg_print(7, "In init_module()\n");
 	SET_MODULE_OWNER(&my_fops);
 	my_major = register_chrdev( my_major, MY_MODULE, &my_fops );
 	if( my_major < 0 ) {
-		printk(KERN_WARNING "ERROR: can't get dynamic major\n" ); //changed to printk <-------
+		printk(KERN_WARNING "ERROR: can't get dynamic major\n" );
 		return my_major;
 	}
 	
-	games = kmalloc(sizeof(struct game) * max_games, GFP_KERNEL); // TODO flags
+	dbg_print(1, "my_major = %d\n", my_major);
+	
+	games = kmalloc(sizeof(struct game) * max_games, GFP_KERNEL);
 	if (!games) {
-		dbg_print(10, "ERROR: Memory error!\n"); //changed to printk <-------
+		dbg_print(10, "ERROR: Memory error!\n");
 		return -1;
 	}
 	
@@ -71,6 +74,7 @@ int init_module( void ) {
 		games[i].winner = 0;
 	}
 	
+	dbg_print(4, "Returning from init_module()\n");
 	return 0;
 }
 
@@ -86,6 +90,7 @@ void cleanup_module( void ) { //what about the case that cleanup_module is calle
 
 
 int my_open( struct inode *inode, struct file *filp ) {
+	dbg_print(7, "In my_open()\n");
 	if(!inode || !filp) return -1; //what should we return???? <----------------------
 	int minor = MINOR(inode->i_rdev);
 	if(minor < 0 || minor > max_games-1){
@@ -98,7 +103,7 @@ int my_open( struct inode *inode, struct file *filp ) {
 	}
 	
 	games[minor].num_of_players++;
-	filp->private_data = (int*) kmalloc (sizeof(int)*2, GFP_KERNEL); // [0]=minor, [1]=colour; TODO: flags
+	filp->private_data = (int*) kmalloc (sizeof(int)*2, GFP_KERNEL); // [0]=minor, [1]=colour;
 	((int *)filp->private_data)[0] = minor;
 	if(games[minor].num_of_players == 1){ //first player 
 		((int *)filp->private_data)[1] = WHITE;
@@ -233,6 +238,13 @@ int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned 
 // hw3q1.c :
 bool Init(Matrix *matrix)
 {
+	for(int i=0; i<N; i++){
+		for(int j=0; j<N; j++){
+			(*matrix)[i][j] = EMPTY;
+		}
+	}
+	
+	dbg_print(7, "In Init()\n");
 	int i;
 	/* initialize the snakes location */
 	for (i = 0; i < M; ++i)
@@ -240,10 +252,12 @@ bool Init(Matrix *matrix)
 		(*matrix)[0][i] =   WHITE * (i + 1);
 		(*matrix)[N - 1][i] = BLACK * (i + 1);
 	}
+	
+	dbg_print(1, "Before RandFoodLocation()\n");
 	/* initialize the food location */
 	if (RandFoodLocation(matrix) != ERR_OK)
 		return FALSE;
-
+	dbg_print(1, "After RandFoodLocation()\n");
 	return TRUE;
 }
 
@@ -406,10 +420,14 @@ ErrorCode RandFoodLocation(Matrix *matrix)
 	Point p;
 	do
 	{
-		get_random_bytes(&p.x,sizeof(int));
+		get_random_bytes(&(p.x),sizeof(p.x));
+		if(p.x < 0) p.x *= -1;
 		p.x = p.x % N;
-		get_random_bytes(&p.y,sizeof(int));
+		dbg_print(1, "&p.x mod(n) after random = %d \n", p.x);
+		get_random_bytes(&(p.y),sizeof(p.y));
+		if(p.y < 0) p.y *= -1;
 		p.y = p.y % N;
+		dbg_print(1, "&p.y mod(n) after random = %d \n", p.x);
 	} while (!IsAvailable(matrix, p) || IsMatrixFull(matrix));
 
 	if (IsMatrixFull(matrix))
