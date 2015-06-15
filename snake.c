@@ -47,7 +47,7 @@ int my_major = 0; 			/* will hold the major # of my device driver */
 struct game* games = NULL;
 
 int init_module( void ) {
-	dbg_print(7, "In init_module()\n");
+	//dbg_print(7, "In init_module()\n");
 	SET_MODULE_OWNER(&my_fops);
 	my_major = register_chrdev( my_major, MY_MODULE, &my_fops );
 	if( my_major < 0 ) {
@@ -55,11 +55,11 @@ int init_module( void ) {
 		return my_major;
 	}
 	
-	dbg_print(1, "my_major = %d\n", my_major);
+	//dbg_print(1, "my_major = %d\n", my_major);
 	
 	games = kmalloc(sizeof(struct game) * max_games, GFP_KERNEL);
 	if (!games) {
-		dbg_print(10, "ERROR: Memory error!\n");
+		//dbg_print(10, "ERROR: Memory error!\n");
 		return -1;
 	}
 	
@@ -74,7 +74,7 @@ int init_module( void ) {
 		games[i].winner = 0;
 	}
 	
-	dbg_print(4, "Returning from init_module()\n");
+	//dbg_print(4, "Returning from init_module()\n");
 	return 0;
 }
 
@@ -90,33 +90,48 @@ void cleanup_module( void ) { //what about the case that cleanup_module is calle
 
 
 int my_open( struct inode *inode, struct file *filp ) {
-	dbg_print(7, "In my_open()\n");
-	if(!inode || !filp) return -1; //what should we return???? <----------------------
+	//dbg_print(7, "In my_open()\n");
+	if(!inode || !filp) return -7; //what should we return???? <----------------------
+	//dbg_print(7, "inode and filp are not NULL\n");
 	int minor = MINOR(inode->i_rdev);
+	//dbg_print(7, "minor = %d\n", minor);
 	if(minor < 0 || minor > max_games-1){
-		return -1; //which errno should we return?? <--------------------------
+		return -2; //which errno should we return?? <--------------------------
 	}
+	//dbg_print(7, "minor >= 0\n");
 	down(&games[minor].sem_game_data); //lock
+	//dbg_print(7, "games[minor].sem_game_data is locked\n");
 	if(games[minor].num_of_players >= 2 || games[minor].winner){
+		//dbg_print(7, "games[minor].num_of_players >= 2 || games[minor].winner\n");
 		up(&games[minor].sem_game_data); //unlock
-		return -1; //which errno should we return?? <--------------------------
+		return -3; //which errno should we return?? <--------------------------
 	}
-	
+	//dbg_print(7, "games[minor].num_of_players < 2 && !games[minor].winner\n");
 	games[minor].num_of_players++;
+	//dbg_print(7, "games[minor].num_of_players = %d\n", games[minor].num_of_players);
+	//if(filp->private_data) dbg_print(1,"before kmalloc, private_data != 0\n");
 	filp->private_data = (int*) kmalloc (sizeof(int)*2, GFP_KERNEL); // [0]=minor, [1]=colour;
-	((int *)filp->private_data)[0] = minor;
+	if(filp->private_data) ((int *)filp->private_data)[0] = minor;
+	else { //malloc failed
+		//dbg_print(7, "malloc failed\n");
+		up(&games[minor].sem_game_data); //unlock
+		return -4; //which errno should we return?? <--------------------------
+	}
+	//dbg_print(7, "malloc succeeded, filp->private_data[0] = %d\n", ((int *)filp->private_data)[0]);
 	if(games[minor].num_of_players == 1){ //first player 
+		//dbg_print(7, "First player\n");
 		((int *)filp->private_data)[1] = WHITE;
 		up(&games[minor].sem_game_data); //unlock
 		down(&(games[minor].sem_begin_game)); //lock
 	}
 	else { //second player
+		//dbg_print(7, "Second player\n");
 		((int *)filp->private_data)[1] = BLACK;
 		games[minor].curr_player = WHITE;
 		up(&games[minor].sem_game_data); //unlock
 		up(&(games[minor].sem_begin_game)); //unlock
 	}
-	
+	//dbg_print(7, "End of Open()\n");
 	return 0;
 }
 
@@ -131,7 +146,9 @@ int my_release( struct inode *inode, struct file *filp ) {
 		games[minor].winner = -(((int *)filp->private_data)[1]);
 	}
 	
-	kfree(filp->private_data);
+	if(filp->private_data) kfree(filp->private_data);
+	filp->private_data = 0;
+	//dbg_print(1,"after kfree, private_data = %p\n", filp->private_data);
 	up(&games[minor].sem_game_data); //unlock
 	return 0;
 }
@@ -191,6 +208,7 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 			games[minor].num_of_players--;
 			games[minor].winner = -player;
 			kfree(filp->private_data);
+			filp->private_data = 0;
 			up(&games[minor].sem_game_data); //unlock
 			return -1; //k_buf_pos-1; what shoulld we return?? <-----------------
 		}
@@ -201,6 +219,7 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 				games[minor].num_of_players--;
 				games[minor].winner = winner;
 				kfree(filp->private_data);
+				filp->private_data = 0;
 				up(&games[minor].sem_game_data); //unlock
 				return k_buf_pos-1; //k_buf_pos-1; what shoulld we return?? <-----------------
 			}
@@ -217,18 +236,26 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 
 
 int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg) {
-/*
-	switch( cmd ) {
-		case MY_OP1:
-            //handle op1;
+	int minor = ((int *)filp->private_data)[0];
+	int player =  ((int *)filp->private_data)[1];
+	int winner;
+	switch(cmd) {
+		case SNAKE_GET_WINNER:
+			down(&games[minor].sem_game_data); //lock
+			winner = games[minor].winner;
+			up(&games[minor].sem_game_data); //unlock
+			if(winner == WHITE) return 4;
+			else if(winner == BLACK) return 2;
+			else if(winner == TIE )  return TIE;
+			else return -1;
 			break;
-
-		case MY_OP2:
-			//handle op2;
+		case SNAKE_GET_COLOR:
+			if(player == WHITE) return 4;
+			else if(player == BLACK) return 2;
+			else return -1;
 			break;
-
 		default: return -ENOTTY;
-	}*/
+	}
 	return 0;
 }
 
@@ -236,7 +263,7 @@ int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned 
 //---------------------------------------------------------------------------------------------
 //---------------------------------------------------------------------------------------------
 // hw3q1.c :
-bool Init(Matrix *matrix)
+bool_t Init(Matrix *matrix)
 {
 	for(int i=0; i<N; i++){
 		for(int j=0; j<N; j++){
@@ -244,7 +271,7 @@ bool Init(Matrix *matrix)
 		}
 	}
 	
-	dbg_print(7, "In Init()\n");
+	//dbg_print(7, "In Init()\n");
 	int i;
 	/* initialize the snakes location */
 	for (i = 0; i < M; ++i)
@@ -253,15 +280,15 @@ bool Init(Matrix *matrix)
 		(*matrix)[N - 1][i] = BLACK * (i + 1);
 	}
 	
-	dbg_print(1, "Before RandFoodLocation()\n");
+	//dbg_print(1, "Before RandFoodLocation()\n");
 	/* initialize the food location */
 	if (RandFoodLocation(matrix) != ERR_OK)
 		return FALSE;
-	dbg_print(1, "After RandFoodLocation()\n");
+	//dbg_print(1, "After RandFoodLocation()\n");
 	return TRUE;
 }
 
-bool Update(Matrix *matrix, Player player, Player* winner, Direction move)
+bool_t Update(Matrix *matrix, Player player, Player* winner, Direction move)
 {
 	ErrorCode e;
 	Point p = GetInputLoc(matrix, player, move);
@@ -338,14 +365,14 @@ int GetSize(Matrix *matrix, Player player)
 	return (*matrix)[p.y][p.x] * player;
 }
 
-bool CheckTarget(Matrix *matrix, Player player, Point p)
+bool_t CheckTarget(Matrix *matrix, Player player, Point p)
 {
 	/* is empty or is the tail of the snake (so it will move the next
 	to make place) */
 	return IsAvailable(matrix, p) || ((*matrix)[p.y][p.x] == player * GetSize(matrix, player));
 }
 
-bool IsAvailable(Matrix *matrix, Point p)
+bool_t IsAvailable(Matrix *matrix, Point p)
 {
 	return
 		/* is out of bounds */
@@ -423,11 +450,11 @@ ErrorCode RandFoodLocation(Matrix *matrix)
 		get_random_bytes(&(p.x),sizeof(p.x));
 		if(p.x < 0) p.x *= -1;
 		p.x = p.x % N;
-		dbg_print(1, "&p.x mod(n) after random = %d \n", p.x);
+		//dbg_print(1, "&p.x mod(n) after random = %d \n", p.x);
 		get_random_bytes(&(p.y),sizeof(p.y));
 		if(p.y < 0) p.y *= -1;
 		p.y = p.y % N;
-		dbg_print(1, "&p.y mod(n) after random = %d \n", p.x);
+		//dbg_print(1, "&p.y mod(n) after random = %d \n", p.x);
 	} while (!IsAvailable(matrix, p) || IsMatrixFull(matrix));
 
 	if (IsMatrixFull(matrix))
@@ -437,7 +464,7 @@ ErrorCode RandFoodLocation(Matrix *matrix)
 	return ERR_OK;
 }
 
-bool IsMatrixFull(Matrix *matrix)
+bool_t IsMatrixFull(Matrix *matrix)
 {
 	Point p;
 	for (p.x = 0; p.x < N; ++p.x)

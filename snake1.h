@@ -39,12 +39,12 @@ black snake is -1  -2  -3 */
 #define EMPTY ( 0) /* to describe an empty point or no player*/
 
 #define GAME_ON ( 0)
-#define TIE     ( 4)
+#define TIE     ( 5)
 /* to describe a point with food. having the value this big guarantees that there will be no
 overlapping between the snake segments' numbers and the food id */
 #define FOOD  (N*N)
 
-typedef char bool;
+typedef char bool_t;
 #define FALSE (0)
 #define TRUE  (1)
 
@@ -72,18 +72,18 @@ ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos );
 ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos);
 int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg);
 
-bool Init(Matrix*); /* initialize the board. return false if the board is illegal (should not occur, affected by N, M parameters) */
-bool Update(Matrix *matrix, Player player, Player* winner, Direction move);/* handle all updating to this player. returns whether to continue or not. */
+bool_t Init(Matrix*); /* initialize the board. return false if the board is illegal (should not occur, affected by N, M parameters) */
+bool_t Update(Matrix *matrix, Player player, Player* winner, Direction move);/* handle all updating to this player. returns whether to continue or not. */
 void Print(Matrix*, char*, size_t);/* prints the state of the board */
 Point GetInputLoc(Matrix*, Player, Direction);/* calculates the location that the player wants to go to */
-bool CheckTarget(Matrix*, Player, Point);/* checks if the player can move to the specified location */
+bool_t CheckTarget(Matrix*, Player, Point);/* checks if the player can move to the specified location */
 Point GetSegment(Matrix*, int);/* gets the location of a segment which is numbered by the value */
-bool IsAvailable(Matrix*, Point);/* returns if the point wanted is in bounds and not occupied by any snake */
+bool_t IsAvailable(Matrix*, Point);/* returns if the point wanted is in bounds and not occupied by any snake */
 ErrorCode CheckFoodAndMove(Matrix*, Player, Point);/* handle food and advance the snake accordingly */
 ErrorCode RandFoodLocation(Matrix*);/* randomize a location for food. return ERR_BOARD_FULL if the board is full */
 void AdvancePlayer(Matrix*, Player, Point);/* advance the snake */
 void IncSizePlayer(Matrix*, Player, Point);/* advance the snake and increase it's size */
-bool IsMatrixFull(Matrix*);/* check if the matrix is full */
+bool_t IsMatrixFull(Matrix*);/* check if the matrix is full */
 int GetSize(Matrix*, Player);/* gets the size of the snake */
 
 #endif /* _SNAKE1_H_ */
