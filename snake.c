@@ -196,7 +196,7 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 	while(count){ //there are still moves in buff
 		down(&games[minor].sem_game_data); //lock
 		Direction move;
-		while(games[minor].curr_player != player){
+		while((games[minor].curr_player != player) && (games[minor].winner == EMPTY)){
 			up(&games[minor].sem_game_data); //unlock
 			schedule();
 			down(&games[minor].sem_game_data); //lock
@@ -210,7 +210,7 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 			kfree(filp->private_data);
 			filp->private_data = 0;
 			up(&games[minor].sem_game_data); //unlock
-			return -1; //k_buf_pos-1; what shoulld we return?? <-----------------
+			return (k_buf_pos > 1 ? k_buf_pos-1 : -1);
 		}
 		else{
 			Player winner;
@@ -221,7 +221,7 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 				kfree(filp->private_data);
 				filp->private_data = 0;
 				up(&games[minor].sem_game_data); //unlock
-				return k_buf_pos-1; //k_buf_pos-1; what shoulld we return?? <-----------------
+				return k_buf_pos;
 			}
 		}
 		games[minor].curr_player = -player;
@@ -515,11 +515,13 @@ void Print(Matrix *matrix, char* buff, size_t count)
 				break;
 			default: //printf("% 3d", (*matrix)[p.y][p.x]);
 				tmp_buff[tmp_buff_curr++]=' ';
-				if((*matrix)[p.y][p.x] < 0)
+				int num = (*matrix)[p.y][p.x];
+				if(num < 0){
 					tmp_buff[tmp_buff_curr++] = '-';
-				else
-					tmp_buff[tmp_buff_curr++] = ' ';
-				tmp_buff[tmp_buff_curr++] = (*matrix)[p.y][p.x] + '0';
+					num *= -1;
+				}
+				else tmp_buff[tmp_buff_curr++] = ' ';
+				tmp_buff[tmp_buff_curr++] = num + '0';
 			}
 		}
 		strncpy(tmp_buff+tmp_buff_curr," |\n",3);
