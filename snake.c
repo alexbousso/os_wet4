@@ -166,12 +166,12 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 	if(!buf || count == 0) return 0;
 	
 	down(&games[minor].sem_game_data); //lock
-	if(games[minor].num_of_players != 2){
+	if(games[minor].num_of_players != 2 || games[minor].winner != EMPTY){
 		up(&games[minor].sem_game_data); //unlock
 		return -1; // what should we return????? <-----------------------------------------
 	}
 
-	kernel_buf = (char*) kmalloc (count, GFP_KERNEL); // TODO: flags
+	kernel_buf = (char*) kmalloc (count, GFP_KERNEL); 
 	copy_from_user(kernel_buf,buf,(unsigned long)count);
 	up(&games[minor].sem_game_data); //unlock
 	
@@ -190,30 +190,18 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 		move = kernel_buf[k_buf_pos++] - '0';
 		if (games[minor].winner || (move != UP && move != DOWN && move != LEFT && move != RIGHT)){
 			kfree(kernel_buf);
-			games[minor].num_of_players--;
-			games[minor].winner = -player;
-			if(filp->private_data) kfree(filp->private_data);
-			filp->private_data = 0;
+			if(games[minor].winner == EMPTY) games[minor].winner = -player;
 			up(&games[minor].sem_game_data); //unlock
-			
 			if(player == WHITE) up(&games[minor].sem_white_players); //unlock
 			else up(&games[minor].sem_black_players); //unlock
-			
 			return (k_buf_pos > 1 ? k_buf_pos-1 : -1);
 		}
 		else{
-			//Player winner;
 			if(!Update(&(games[minor]), move)){
 				kfree(kernel_buf);
-				games[minor].num_of_players--;
-				//games[minor].winner = winner;
-				if(filp->private_data) kfree(filp->private_data);
-				filp->private_data = 0;
 				up(&games[minor].sem_game_data); //unlock
-				
 				if(player == WHITE) up(&games[minor].sem_white_players); //unlock
 				else up(&games[minor].sem_black_players); //unlock
-				
 				return k_buf_pos;
 			}
 		}
