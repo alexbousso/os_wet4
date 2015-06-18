@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NUM_OF_GAMES=10
+NUM_OF_GAMES=50
 
 function runCommand {
     command=$1
@@ -23,11 +23,29 @@ function runCommand {
     fi
 }
 
-runCommand make
-insmod ./snake.o max_games=$NUM_OF_GAMES
+if [[ $# -ne 1 ]]; then
+	echo "Usage: do_stuff.sh [install | uninstall]"
+	exit 1
+fi
 
-mod=$(cat /proc/devices | grep snake | cut -d ' ' -f1)
+if [[ $1 = "install" ]]; then
+	runCommand make
+	insmod ./snake.o max_games=$NUM_OF_GAMES
 
-mknod /dev/game c $mod 3
-cat /dev/game
+	mod=$(cat /proc/devices | grep snake | cut -d ' ' -f1)
+	for (( i = 0; i < NUM_OF_GAMES; i++ )); do
+		mknod /dev/snake$i c $mod $i
+	done
+
+	gcc -std=c99 -g -DVERBOSE -Wall tests.c
+	
+	exit 0
+fi
+
+if [[ $1 = "uninstall" ]]; then
+	rm -f /dev/snake*
+	rmmod snake
+	
+	exit 0
+fi
 
