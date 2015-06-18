@@ -29,7 +29,7 @@ if [[ $# -ne 1 ]]; then
 fi
 
 if [[ $1 = "install" ]]; then
-	runCommand make
+	runCommand "make"
 	insmod ./snake.o max_games=$NUM_OF_GAMES
 
 	mod=$(cat /proc/devices | grep snake | cut -d ' ' -f1)
@@ -43,6 +43,8 @@ if [[ $1 = "install" ]]; then
 fi
 
 if [[ $1 = "uninstall" ]]; then
+	rm -f ./a.o
+	rm -f ./a.out
 	rm -f /dev/snake*
 	rmmod snake
 	
