@@ -66,6 +66,20 @@ typedef int ErrorCode;
 #define ERR_BOARD_FULL			((ErrorCode)-1)
 #define ERR_SNAKE_IS_TOO_HUNGRY ((ErrorCode)-2)
 
+struct game {
+	struct semaphore sem_begin_game;
+	struct semaphore sem_game_data;
+	struct semaphore sem_white_players;
+	struct semaphore sem_black_players;
+	int num_of_players;
+	Player curr_player;
+	Matrix board;
+	Player winner;
+	int white_counter;
+	int black_counter;
+};
+
+
 int my_open( struct inode *inode, struct file *filp );
 int my_release( struct inode *inode, struct file *filp );
 ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos );
@@ -73,13 +87,13 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg);
 
 bool_t Init(Matrix*); /* initialize the board. return false if the board is illegal (should not occur, affected by N, M parameters) */
-bool_t Update(Matrix *matrix, Player player, Player* winner, Direction move);/* handle all updating to this player. returns whether to continue or not. */
+bool_t Update(struct game* g, Direction move);/* handle all updating to this player. returns whether to continue or not. */
 void Print(Matrix*, char*, size_t);/* prints the state of the board */
 Point GetInputLoc(Matrix*, Player, Direction);/* calculates the location that the player wants to go to */
 bool_t CheckTarget(Matrix*, Player, Point);/* checks if the player can move to the specified location */
 Point GetSegment(Matrix*, int);/* gets the location of a segment which is numbered by the value */
 bool_t IsAvailable(Matrix*, Point);/* returns if the point wanted is in bounds and not occupied by any snake */
-ErrorCode CheckFoodAndMove(Matrix*, Player, Point);/* handle food and advance the snake accordingly */
+ErrorCode CheckFoodAndMove(struct game*, Point);/* handle food and advance the snake accordingly */
 ErrorCode RandFoodLocation(Matrix*);/* randomize a location for food. return ERR_BOARD_FULL if the board is full */
 void AdvancePlayer(Matrix*, Player, Point);/* advance the snake */
 void IncSizePlayer(Matrix*, Player, Point);/* advance the snake and increase it's size */

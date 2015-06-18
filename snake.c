@@ -30,15 +30,6 @@ struct file_operations my_fops = {
 	.ioctl=		my_ioctl,
 };
 
-struct game {
-	struct semaphore sem_begin_game;
-	struct semaphore sem_game_data;
-	int num_of_players;
-	Player curr_player;
-	Matrix board;
-	Player winner;
-};
-
 int max_games = 0;
 MODULE_PARM( max_games, "i" );
 
@@ -66,8 +57,12 @@ int init_module( void ) {
 	for(int i=0; i<max_games; i++){
 		init_MUTEX_LOCKED(&(games[i].sem_begin_game));
 		init_MUTEX(&(games[i].sem_game_data));
+		init_MUTEX(&(games[i].sem_white_players));
+		init_MUTEX(&(games[i].sem_black_players));
 		games[i].num_of_players = 0;
 		games[i].curr_player = 0;
+		games[i].white_counter = K;
+		games[i].black_counter = K;
 		if (!Init(&(games[i].board))){
 			return -1; // return value when init failes??? <--------------------------------
 		}
@@ -90,48 +85,35 @@ void cleanup_module( void ) { //what about the case that cleanup_module is calle
 
 
 int my_open( struct inode *inode, struct file *filp ) {
-	//dbg_print(7, "In my_open()\n");
 	if(!inode || !filp) return -7; //what should we return???? <----------------------
-	//dbg_print(7, "inode and filp are not NULL\n");
 	int minor = MINOR(inode->i_rdev);
-	//dbg_print(7, "minor = %d\n", minor);
 	if(minor < 0 || minor > max_games-1){
 		return -2; //which errno should we return?? <--------------------------
 	}
-	//dbg_print(7, "minor >= 0\n");
 	down(&games[minor].sem_game_data); //lock
-	//dbg_print(7, "games[minor].sem_game_data is locked\n");
 	if(games[minor].num_of_players >= 2 || games[minor].winner){
-		//dbg_print(7, "games[minor].num_of_players >= 2 || games[minor].winner\n");
 		up(&games[minor].sem_game_data); //unlock
 		return -3; //which errno should we return?? <--------------------------
 	}
-	//dbg_print(7, "games[minor].num_of_players < 2 && !games[minor].winner\n");
 	games[minor].num_of_players++;
-	//dbg_print(7, "games[minor].num_of_players = %d\n", games[minor].num_of_players);
 	//if(filp->private_data) dbg_print(1,"before kmalloc, private_data != 0\n");
 	filp->private_data = (int*) kmalloc (sizeof(int)*2, GFP_KERNEL); // [0]=minor, [1]=colour;
 	if(filp->private_data) ((int *)filp->private_data)[0] = minor;
 	else { //malloc failed
-		//dbg_print(7, "malloc failed\n");
 		up(&games[minor].sem_game_data); //unlock
 		return -4; //which errno should we return?? <--------------------------
 	}
-	//dbg_print(7, "malloc succeeded, filp->private_data[0] = %d\n", ((int *)filp->private_data)[0]);
 	if(games[minor].num_of_players == 1){ //first player 
-		//dbg_print(7, "First player\n");
 		((int *)filp->private_data)[1] = WHITE;
 		up(&games[minor].sem_game_data); //unlock
 		down(&(games[minor].sem_begin_game)); //lock
 	}
 	else { //second player
-		//dbg_print(7, "Second player\n");
 		((int *)filp->private_data)[1] = BLACK;
 		games[minor].curr_player = WHITE;
 		up(&games[minor].sem_game_data); //unlock
 		up(&(games[minor].sem_begin_game)); //unlock
 	}
-	//dbg_print(7, "End of Open()\n");
 	return 0;
 }
 
@@ -193,6 +175,9 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 	copy_from_user(kernel_buf,buf,(unsigned long)count);
 	up(&games[minor].sem_game_data); //unlock
 	
+	if(player == WHITE) down(&games[minor].sem_white_players); //lock
+	else down(&games[minor].sem_black_players); //lock
+	
 	while(count){ //there are still moves in buff
 		down(&games[minor].sem_game_data); //lock
 		Direction move;
@@ -207,20 +192,28 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 			kfree(kernel_buf);
 			games[minor].num_of_players--;
 			games[minor].winner = -player;
-			kfree(filp->private_data);
+			if(filp->private_data) kfree(filp->private_data);
 			filp->private_data = 0;
 			up(&games[minor].sem_game_data); //unlock
+			
+			if(player == WHITE) up(&games[minor].sem_white_players); //unlock
+			else up(&games[minor].sem_black_players); //unlock
+			
 			return (k_buf_pos > 1 ? k_buf_pos-1 : -1);
 		}
 		else{
-			Player winner;
-			if(!Update(&(games[minor].board),player, &winner, move)){
+			//Player winner;
+			if(!Update(&(games[minor]), move)){
 				kfree(kernel_buf);
 				games[minor].num_of_players--;
-				games[minor].winner = winner;
-				kfree(filp->private_data);
+				//games[minor].winner = winner;
+				if(filp->private_data) kfree(filp->private_data);
 				filp->private_data = 0;
 				up(&games[minor].sem_game_data); //unlock
+				
+				if(player == WHITE) up(&games[minor].sem_white_players); //unlock
+				else up(&games[minor].sem_black_players); //unlock
+				
 				return k_buf_pos;
 			}
 		}
@@ -230,6 +223,9 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 		buf++;
 	}
 	kfree(kernel_buf);
+	if(player == WHITE) up(&games[minor].sem_white_players); //unlock
+	else up(&games[minor].sem_black_players); //unlock
+	
 	return orig_size;
 }
 
@@ -288,28 +284,28 @@ bool_t Init(Matrix *matrix)
 	return TRUE;
 }
 
-bool_t Update(Matrix *matrix, Player player, Player* winner, Direction move)
+bool_t Update(struct game* g, Direction move)//(Matrix *matrix, Player player, Player* winner, Direction move)
 {
 	ErrorCode e;
-	Point p = GetInputLoc(matrix, player, move);
+	Point p = GetInputLoc(&(g->board), g->curr_player, move);
 
-	if (!CheckTarget(matrix, player, p)){// printf("% d lost.", player);
-		*winner = -player;
+	if (!CheckTarget(&(g->board), g->curr_player, p)){// printf("% d lost.", player);
+		g->winner = -(g->curr_player);
 		return FALSE;
 	}
 
-	e = CheckFoodAndMove(matrix, player, p);
+	e = CheckFoodAndMove(g,p);//(&(g->board), g->curr_player, p);
 	if (e == ERR_BOARD_FULL){ //printf("the board is full, tie");
-		*winner = TIE;
+		g->winner = TIE;
 		return FALSE;
 	}
 	if (e == ERR_SNAKE_IS_TOO_HUNGRY){ //printf("% d lost. the snake is too hungry", player);
-		*winner = -player;
+		g->winner = -(g->curr_player);
 		return FALSE;
 	}
 	// only option is that e == ERR_OK
-	if (IsMatrixFull(matrix)){ //printf("the board is full, tie");
-		*winner = TIE;
+	if (IsMatrixFull(&(g->board))){ //printf("the board is full, tie");
+		g->winner = TIE;
 		return FALSE;
 	}
 
@@ -382,29 +378,30 @@ bool_t IsAvailable(Matrix *matrix, Point p)
 		((*matrix)[p.y][p.x] != EMPTY && (*matrix)[p.y][p.x] != FOOD));
 }
 
-ErrorCode CheckFoodAndMove(Matrix *matrix, Player player, Point p)
+ErrorCode CheckFoodAndMove(struct game* g, Point p)//(Matrix *matrix, Player player, Point p)
 {
-	static int white_counter = K;
-	static int black_counter = K;
+	Matrix *matrix = &(g->board);
+	//static int white_counter = K;
+	//static int black_counter = K;
 	/* if the player did come to the place where there is food */
 	if ((*matrix)[p.y][p.x] == FOOD)
 	{
-		if (player == BLACK) black_counter = K;
-		if (player == WHITE) white_counter = K;
+		if (g->curr_player == BLACK) g->black_counter = K;
+		if (g->curr_player == WHITE) g->white_counter = K;
 
-		IncSizePlayer(matrix, player, p);
+		IncSizePlayer(matrix, g->curr_player, p);
 
 		if (RandFoodLocation(matrix) != ERR_OK)
 			return ERR_BOARD_FULL;
 	}
 	else /* check hunger */
 	{
-		if (player == BLACK && --black_counter == 0)
+		if (g->curr_player == BLACK && --(g->black_counter) == 0)
 			return ERR_SNAKE_IS_TOO_HUNGRY;
-		if (player == WHITE && --white_counter == 0)
+		if (g->curr_player == WHITE && --(g->white_counter) == 0)
 			return ERR_SNAKE_IS_TOO_HUNGRY;
 
-		AdvancePlayer(matrix, player, p);
+		AdvancePlayer(matrix, g->curr_player, p);
 	}
 	return ERR_OK;
 }
