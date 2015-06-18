@@ -84,6 +84,7 @@ int my_open( struct inode *inode, struct file *filp );
 int my_release( struct inode *inode, struct file *filp );
 ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos );
 ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos);
+loff_t my_llseek(struct file *filp, loff_t a, int b);
 int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg);
 
 bool_t Init(Matrix*); /* initialize the board. return false if the board is illegal (should not occur, affected by N, M parameters) */

@@ -21,12 +21,22 @@
 
 MODULE_LICENSE( "GPL" );
 
+#define NULL_ARG		-EFAULT
+#define COPY_USER_FAIL	-EFAULT
+#define MEMORY_FAIL		-ENOMEM
+#define MAX_PLAYERS		-EPERM
+#define ILLEGAL_MINOR	-ENODEV
+#define GENERAL_ERROR	-EINVAL
+#define PLAYER_QUIT		-10
+#define GAME_OVER		13 	//<-----
+
+
 struct file_operations my_fops = {
 	.open=		my_open,
 	.release=	my_release,
 	.read=		my_read,
 	.write=		my_write,
-	.llseek=		NULL,
+	.llseek=	my_llseek,
 	.ioctl=		my_ioctl,
 };
 
@@ -51,7 +61,7 @@ int init_module( void ) {
 	games = kmalloc(sizeof(struct game) * max_games, GFP_KERNEL);
 	if (!games) {
 		//dbg_print(10, "ERROR: Memory error!\n");
-		return -1;
+		return MEMORY_FAIL;
 	}
 	
 	for(int i=0; i<max_games; i++){
@@ -64,12 +74,11 @@ int init_module( void ) {
 		games[i].white_counter = K;
 		games[i].black_counter = K;
 		if (!Init(&(games[i].board))){
-			return -1; // return value when init failes??? <--------------------------------
+			return GENERAL_ERROR; // ERRNO????<--------------------------------
 		}
 		games[i].winner = 0;
 	}
 	
-	//dbg_print(4, "Returning from init_module()\n");
 	return 0;
 }
 
@@ -85,23 +94,22 @@ void cleanup_module( void ) { //what about the case that cleanup_module is calle
 
 
 int my_open( struct inode *inode, struct file *filp ) {
-	if(!inode || !filp) return -7; //what should we return???? <----------------------
+	if(!inode || !filp) return NULL_ARG; //ERRNO???
 	int minor = MINOR(inode->i_rdev);
 	if(minor < 0 || minor > max_games-1){
-		return -2; //which errno should we return?? <--------------------------
+		return ILLEGAL_MINOR;
 	}
 	down(&games[minor].sem_game_data); //lock
 	if(games[minor].num_of_players >= 2 || games[minor].winner){
 		up(&games[minor].sem_game_data); //unlock
-		return -3; //which errno should we return?? <--------------------------
+		return MAX_PLAYERS;
 	}
 	games[minor].num_of_players++;
-	//if(filp->private_data) dbg_print(1,"before kmalloc, private_data != 0\n");
 	filp->private_data = (int*) kmalloc (sizeof(int)*2, GFP_KERNEL); // [0]=minor, [1]=colour;
 	if(filp->private_data) ((int *)filp->private_data)[0] = minor;
 	else { //malloc failed
 		up(&games[minor].sem_game_data); //unlock
-		return -4; //which errno should we return?? <--------------------------
+		return MEMORY_FAIL;
 	}
 	if(games[minor].num_of_players == 1){ //first player 
 		((int *)filp->private_data)[1] = WHITE;
@@ -119,7 +127,7 @@ int my_open( struct inode *inode, struct file *filp ) {
 
 
 int my_release( struct inode *inode, struct file *filp ) {
-	if(!inode || !filp) return -1; //what should we return???? <----------------------
+	if(!inode || !filp) return NULL_ARG; //ERRNO???
 	int minor = MINOR(inode->i_rdev);
 	down(&games[minor].sem_game_data); //lock
 	games[minor].num_of_players--;
@@ -130,7 +138,6 @@ int my_release( struct inode *inode, struct file *filp ) {
 	
 	if(filp->private_data) kfree(filp->private_data);
 	filp->private_data = 0;
-	//dbg_print(1,"after kfree, private_data = %p\n", filp->private_data);
 	up(&games[minor].sem_game_data); //unlock
 	return 0;
 }
@@ -139,20 +146,24 @@ int my_release( struct inode *inode, struct file *filp ) {
 ssize_t my_read( struct file *filp, char *buf, size_t count, loff_t *f_pos ) {
 	char* tmp_buf;
 	int minor;
-	if(!filp || (!buf && count)) return -1; //what should we return???? <-------------------------------
+	if(!filp || (!buf && count))	return NULL_ARG;
 	if(!count) return 0;
 	minor = ((int *)filp->private_data)[0];
 	down(&games[minor].sem_game_data); //lock
 	if(games[minor].num_of_players != 2){
 		up(&games[minor].sem_game_data); //unlock
-		return -1; // what should we return????? <-----------------------------------------
+		return PLAYER_QUIT;
 	}
-	tmp_buf = (char*) kmalloc(count, GFP_KERNEL); // TODO: flags
+	tmp_buf = (char*) kmalloc(count, GFP_KERNEL);
+	if(!tmp_buf){
+		up(&games[minor].sem_game_data); //unlock
+		return MEMORY_FAIL;
+	}
 	Print(&(games[minor].board), tmp_buf, count);
-	copy_to_user(buf, tmp_buf, (unsigned long)count);
+	int not_copied = copy_to_user(buf, tmp_buf, (unsigned long)count);
 	kfree(tmp_buf);
 	up(&games[minor].sem_game_data); //unlock
-	return count;
+	return (not_copied == count ? COPY_USER_FAIL : count-not_copied);
 }
 
 
@@ -162,16 +173,24 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 	char* kernel_buf;
 	int k_buf_pos = 0, orig_size = count;
 	
-	if(!filp) return -1; //what should we return???? <-------------------------------
-	if(!buf || count == 0) return 0;
+	if(!filp || (!buf && count)) 	return NULL_ARG;
+	if(count == 0) 					return 0;
 	
 	down(&games[minor].sem_game_data); //lock
-	if(games[minor].num_of_players != 2 || games[minor].winner != EMPTY){
+	if(games[minor].num_of_players != 2){
 		up(&games[minor].sem_game_data); //unlock
-		return -1; // what should we return????? <-----------------------------------------
+		return PLAYER_QUIT;
+	}
+	if(games[minor].winner != EMPTY){
+		up(&games[minor].sem_game_data); //unlock
+		return GAME_OVER;
 	}
 
-	kernel_buf = (char*) kmalloc (count, GFP_KERNEL); 
+	kernel_buf = (char*) kmalloc (count, GFP_KERNEL);
+	if(!kernel_buf){
+		up(&games[minor].sem_game_data); //unlock
+		return MEMORY_FAIL;
+	}
 	copy_from_user(kernel_buf,buf,(unsigned long)count);
 	up(&games[minor].sem_game_data); //unlock
 	
@@ -190,10 +209,16 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 		move = kernel_buf[k_buf_pos++] - '0';
 		if (games[minor].winner || (move != UP && move != DOWN && move != LEFT && move != RIGHT)){
 			kfree(kernel_buf);
-			if(games[minor].winner == EMPTY) games[minor].winner = -player;
-			up(&games[minor].sem_game_data); //unlock
 			if(player == WHITE) up(&games[minor].sem_white_players); //unlock
 			else up(&games[minor].sem_black_players); //unlock
+			if(games[minor].winner == EMPTY){
+				games[minor].winner = -player;
+			}
+			else {
+				up(&games[minor].sem_game_data); //unlock
+				return GAME_OVER;
+			}
+			up(&games[minor].sem_game_data); //unlock
 			return (k_buf_pos > 1 ? k_buf_pos-1 : -1);
 		}
 		else{
@@ -217,7 +242,9 @@ ssize_t my_write(struct file *filp, const char *buf, size_t count, loff_t *f_pos
 	return orig_size;
 }
 
-
+loff_t my_llseek(struct file *filp, loff_t a, int b) {
+	return -ENOSYS;
+}
 
 int my_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg) {
 	int minor = ((int *)filp->private_data)[0];
