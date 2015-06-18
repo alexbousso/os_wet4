@@ -59,7 +59,6 @@ static bool testOpen();
 static bool testRelease();
 static bool testWrite1();
 static bool testWrite2();
-static bool testIlseek();
 static bool testRead();
 static bool testGameFlow();
 
@@ -88,6 +87,7 @@ static bool testOpen() {
 		close(fd);
 		_exit(0);
 	} else {
+		workHard();	//so son will be first player
 		int fd = open("/dev/snake0", O_RDWR);
 		//print("fd = %d, errno = %d\n", fd, errno);
 		ASSERT(fd >= 0);
@@ -105,6 +105,7 @@ static bool testRelease() {
 		close(fd);
 		_exit(0);
 	} else {
+		workHard();	//so son will be first player
 		int fd = open("/dev/snake1", O_RDWR);
 		ASSERT(fd >= 0);
 		workHard();
@@ -120,22 +121,27 @@ static bool testRelease() {
 
 //checking that wrong move makes you loose
 static bool testWrite1() {
-	if (fork() == 0) {
+	if (fork() == 0) {	//WHITE PLAYER
 		int fd = open("/dev/snake3", O_RDWR);
 		ASSERT(fd >= 0);
 		char move = '1';
 		write(fd, &move, 1);
+		//int color = ioctl(fd, SNAKE_GET_COLOR, NULL);
+		//int winner = ioctl(fd, SNAKE_GET_WINNER, NULL);
+		//printf("in son : winner = %d color = %d\n", winner, color);
 		workHard();
 		close(fd);
 		_exit(0);
-	} else {
+	} else {	//BLACK PLAYER
+		workHard();	//so son will be first player
 		int fd = open("/dev/snake3", O_RDWR);
 		ASSERT(fd >= 0);
 		workHard();
-		int color = ioctl(fd, SNAKE_GET_COLOR);
-		int winner = ioctl(fd, SNAKE_GET_WINNER);
-		printf("winner = %d color = %d\n", color, winner);
+		int color = ioctl(fd, SNAKE_GET_COLOR, NULL);
+		int winner = ioctl(fd, SNAKE_GET_WINNER, NULL);
+		//printf("in father winner = %d color = %d\n", winner, color);
 		ASSERT(winner == color);
+		//printf("father closes\n");
 		close(fd);
 		wait(0);
 		return true;
@@ -147,6 +153,8 @@ static bool testWrite2() {
 	if (fork() == 0) {
 		int fd = open("/dev/snake4", O_RDWR);
 		ASSERT(fd >= 0);
+		int winner = ioctl(fd, SNAKE_GET_WINNER);
+		ASSERT(winner != WHITE && winner != BLACK);
 		char move = '2';
 		write(fd, &move, 0);
 		write(fd, &move, 1);
@@ -154,25 +162,18 @@ static bool testWrite2() {
 		close(fd);
 		_exit(0);
 	} else {
+		workHard();	//so son will be first player
 		int fd = open("/dev/snake4", O_RDWR);
 		ASSERT(fd >= 0);
 		char move = '6';
 		write(fd, &move, 0);
 		write(fd, &move, 1);
 		workHard();
-		int winner = ioctl(fd, SNAKE_GET_WINNER);
-		ASSERT(winner != WHITE && winner != BLACK);
 		close(fd);
 		wait(0);
 		return true;
 	}
 }
-
-static bool testIlseek() {
-	ASSERT(!llseek(getpid(), 1, 1));
-	return true;
-}
-
 
 static bool testRead() {
 		if (fork() == 0) {
@@ -185,12 +186,13 @@ static bool testRead() {
 		}
 		ASSERT(read(fd, buf, 8));
 		for(int i=0; i<8; i++){
-			printf("i=%d and buf[i] = %c\n",i,buf[i]);
+			//printf("i=%d and buf[i] = %c\n",i,buf[i]);
 			ASSERT(buf[i] != 's');
 		}
 		close(fd);
 		_exit(0);
 	} else {
+		workHard();	//so son will be first player
 		int fd = open("/dev/snake5", O_RDWR);
 		ASSERT(fd >= 0);
 		workHard();
@@ -212,6 +214,7 @@ static bool testGameFlow() {
 		close(fd);
 		_exit(0);
 	} else {
+		workHard();	//so son will be first player
 		int fd = open("/dev/snake6", O_RDWR);
 		ASSERT(fd >= 0);
 		
@@ -228,11 +231,10 @@ static bool testGameFlow() {
 }
 
 int main() {
-	//RUN_TEST(testOpen());
-	//RUN_TEST(testRelease());
+	RUN_TEST(testOpen());
+	RUN_TEST(testRelease());
 	RUN_TEST(testWrite1());
 	RUN_TEST(testWrite2());
-	//RUN_TEST(testIlseek());
 	RUN_TEST(testRead());
 	RUN_TEST(testGameFlow());
 	return 0;
